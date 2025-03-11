@@ -11,8 +11,13 @@ from langchain_openai import ChatOpenAI
 
 import uuid
 from langchain_community.vectorstores import Chroma
+from langchain.storage import InMemoryStore
 from langchain.schema import Document
 from langchain_community.embeddings import OpenAIEmbeddings
+from langchain.retrievers.multi_vector import MultiVectorRetriever
+
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.messages import SystemMessage, HumanMessage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -77,7 +82,7 @@ class EmbeddingsGenerator:
                 raise NotImplementedError(f"Embedding model '{embedding_model}' not implemented")
 
             # Initialize Chroma vector store with Langchain
-            self.vectorstore = Chroma(
+            vectorstore = Chroma(
                 collection_name="multi_modal_rag",
                 embedding_function=self.embeddings,
                 persist_directory=self.vector_db_dir
@@ -85,8 +90,19 @@ class EmbeddingsGenerator:
             logger.info("Initialized Chroma vector store")
 
             # Initialize SQLite document store using custom implementation
-            self.docstore = SQLiteStore(db_path=self.sqlite_db_path)
-            logger.info("Initialized SQLite document store")
+            #docstore = SQLiteStore(db_path=self.sqlite_db_path)
+            #logger.info("Initialized SQLite document store")
+
+            docstore = InMemoryStore()
+            logger.info("Initialized document store")
+
+            # The retriever (empty to start)
+            self.id_key= "doc_id"
+            self.retriever = MultiVectorRetriever(
+                vectorstore=vectorstore,
+                docstore=docstore,
+                id_key=self.id_key,
+            )
             
             
         except ValueError as e:
@@ -270,6 +286,72 @@ class EmbeddingsGenerator:
         except Exception as e:
             logger.error(f"Error summarizing images: {e}")
 
+    # def persist_data_langchain(self, text_summaries, table_summaries, image_summaries,
+    #                            original_texts, original_tables, original_images):
+    #     """
+    #     Persist summaries in the Chroma vector store and original data in SQLite.
+    #     Generates a unique identifier for each document, creates Document objects,
+    #     and associates the originals in the document store.
+        
+    #     Args:
+    #         text_summaries (list): List of text summaries
+    #         table_summaries (list): List of table summaries
+    #         image_summaries (list): List of image summaries
+    #         original_texts (list): List of original texts
+    #         original_tables (list): List of original tables
+    #         original_images (list): List of original images
+            
+    #     Returns:
+    #         tuple: (vectorstore, docstore) - The configured stores
+            
+    #     Raises:
+    #         RuntimeError: If persistence fails
+    #     """
+    #     try:
+    #         id_key = self.id_key
+
+    #         def add_documents(summaries, originals, content_type):
+    #             """Helper function to add documents to both stores"""
+    #             if not summaries or not originals:
+    #                 logger.info(f"No {content_type} to persist")
+    #                 return
+                
+    #             if len(summaries) != len(originals):
+    #                 logger.warning(
+    #                     f"Mismatch between {content_type} summaries ({len(summaries)}) " 
+    #                     f"and originals ({len(originals)})"
+    #                 )
+                
+    #             # Generate unique IDs for each document
+    #             doc_ids = [str(uuid.uuid4()) for _ in range(len(summaries))]
+                
+    #             # Create Document objects with summaries and metadata
+    #             docs = [
+    #                 Document(page_content=summary, metadata={id_key: doc_ids[i], "type": content_type})
+    #                 for i, summary in enumerate(summaries)
+    #             ]
+                
+    #             # Persist summaries in Chroma vector store
+    #             self.retriever.vectorstore.add_documents(docs)
+                
+    #             # Persist original data in SQLite docstore
+    #             doc_pairs = list(zip(doc_ids, originals))
+    #             self.retriever.docstore.mset(doc_pairs)
+                
+    #             logger.info(f"{content_type.capitalize()} persisted: {len(docs)} documents")
+
+    #         # Process each content type
+    #         add_documents(text_summaries, original_texts, "text")
+    #         add_documents(table_summaries, original_tables, "table")
+    #         add_documents(image_summaries, original_images, "image")
+
+    #         # Return both components for retrieval
+    #         return self.retriever.docstore, self.retriever.docstore
+
+    #     except Exception as e:
+    #         logger.error(f"Error persisting data using Langchain: {e}")
+    #         raise RuntimeError(f"Data persistence failed: {e}")
+
     def persist_data_langchain(self, text_summaries, table_summaries, image_summaries,
                                original_texts, original_tables, original_images):
         """
@@ -292,7 +374,7 @@ class EmbeddingsGenerator:
             RuntimeError: If persistence fails
         """
         try:
-            id_key = "doc_id"
+            id_key = self.id_key
 
             def add_documents(summaries, originals, content_type):
                 """Helper function to add documents to both stores"""
@@ -316,11 +398,9 @@ class EmbeddingsGenerator:
                 ]
                 
                 # Persist summaries in Chroma vector store
-                self.vectorstore.add_documents(docs)
-                
-                # Persist original data in SQLite docstore
-                doc_pairs = list(zip(doc_ids, originals))
-                self.docstore.mset(doc_pairs)
+                self.retriever.vectorstore.add_documents(docs)                
+                # Persist original data in docstore
+                self.retriever.docstore.mset(list(zip(doc_ids, originals)))
                 
                 logger.info(f"{content_type.capitalize()} persisted: {len(docs)} documents")
 
@@ -330,11 +410,12 @@ class EmbeddingsGenerator:
             add_documents(image_summaries, original_images, "image")
 
             # Return both components for retrieval
-            return self.vectorstore, self.docstore
+            return self.retriever
 
         except Exception as e:
             logger.error(f"Error persisting data using Langchain: {e}")
             raise RuntimeError(f"Data persistence failed: {e}")
+
 
 
     def retrieve_data(self, query: str, k: int = 3):
@@ -356,7 +437,7 @@ class EmbeddingsGenerator:
             for doc in docs:
                 doc_id = doc.metadata.get("doc_id")
                 if doc_id:
-                    original_data = self.docstore.get(doc_id)
+                    original_data = self.retriever.docstore.get(doc_id)
                     # Se añade el contenido original a la metadata del documento
                     doc.metadata["original_data"] = original_data
             logger.info(f"Retrieved {len(docs)} documents for query: '{query}'.")
@@ -364,3 +445,68 @@ class EmbeddingsGenerator:
         except Exception as e:
             logger.error(f"Error retrieving data for query '{query}': {e}")
             raise
+
+
+    def parse_docs(self, docs):
+        """Split base64-encoded images and texts"""
+        b64 = []
+        text = []
+        for doc in docs:
+            try:
+                base64.b64decode(doc)
+                b64.append(doc)
+            except Exception as e:
+                text.append(doc)
+        return {"images": b64, "texts": text}
+
+    def build_prompt(self, kwargs):
+    
+        docs_by_type = kwargs["context"]
+        user_question = kwargs["question"]
+    
+        context_text = ""
+        if len(docs_by_type["texts"]) > 0:
+            for text_element in docs_by_type["texts"]:
+                context_text += text_element.text
+    
+        # construct prompt with context (including images)
+        prompt_template = f"""
+        Responde la pregunta basándote únicamente en el siguiente contexto, que puede incluir texto, tablas y imágenes.
+        Contexto: {context_text}
+        Pregunta: {user_question}
+        """
+    
+        prompt_content = [{"type": "text", "text": prompt_template}]
+    
+        if len(docs_by_type["images"]) > 0:
+            for image in docs_by_type["images"]:
+                prompt_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                    }
+                )
+    
+        return ChatPromptTemplate.from_messages(
+            [
+                HumanMessage(content=prompt_content),
+            ]
+        )
+
+    def process_user_query(self, query:str):
+        logger.info(f"Processing query: {query}")
+        chain_with_sources = {
+                "context": self.retriever | RunnableLambda(self.parse_docs),
+                "question": RunnablePassthrough(),
+            } | RunnablePassthrough().assign(
+                  response=(
+                    RunnableLambda(self.build_prompt)
+                    | ChatOpenAI(model="gpt-4o-mini")
+                    | StrOutputParser()
+                )
+            )
+        
+        response = chain_with_sources.invoke(query)
+        logger.info(f"Chain executed")
+
+        return response

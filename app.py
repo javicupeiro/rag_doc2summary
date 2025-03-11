@@ -86,6 +86,7 @@ def initialize_processors(dirs):
 def display_image(base64_image):
     """Display a base64 encoded image."""
     try:
+        logger.info(f"Displaying image in streamlit")
         image_data = base64.b64decode(base64_image)
         image = Image.open(io.BytesIO(image_data))
         st.image(image, use_column_width=True)
@@ -147,7 +148,7 @@ def process_pdf(file_path, processor, embeddings_generator):
                 
                 # Persist the data using Langchain with Chroma and SQLite
                 with st.spinner("Persisting data to vector store and document store..."):
-                    vectorstore, docstore = embeddings_generator.persist_data_langchain(
+                    retriever = embeddings_generator.persist_data_langchain(
                         text_summaries=text_summaries,
                         table_summaries=table_summaries,
                         image_summaries=image_summaries,
@@ -166,37 +167,64 @@ def process_pdf(file_path, processor, embeddings_generator):
                 return False
 
 # Function to chat with the documents
+# def chat_with_documents(query, embeddings_generator):
+#     """Retrieve and display relevant document chunks based on the query."""
+#     try:
+#         results = embeddings_generator.retrieve_data(query, k=3)
+        
+#         if not results:
+#             return "I couldn't find any relevant information in the documents to answer your question."
+        
+#         # Create a response based on the retrieved documents
+#         response = "Here's what I found in your documents:\n\n"
+        
+#         for i, doc in enumerate(results):
+#             doc_type = doc.metadata.get("type", "unknown")
+#             response += f"**Source {i+1} ({doc_type})**: {doc.page_content}\n\n"
+            
+#             # Add original content summary if available
+#             if "original_data" in doc.metadata:
+#                 # Truncate if too long
+#                 orig_data = doc.metadata["original_data"]
+#                 if isinstance(orig_data, str):
+#                     if len(orig_data) > 150:
+#                         orig_data = orig_data[:150] + "..."
+#                     response += f"*From original content: {orig_data}*\n\n"
+#                 else:
+#                     response += f"*Original content available (non-text)*\n\n"
+        
+#         return response
+        
+#     except Exception as e:
+#         logger.error(f"Error retrieving documents: {e}", exc_info=True)
+#         return f"Error processing your query: {str(e)}"
+
 def chat_with_documents(query, embeddings_generator):
     """Retrieve and display relevant document chunks based on the query."""
     try:
-        results = embeddings_generator.retrieve_data(query, k=3)
+        results = embeddings_generator.process_user_query(query)
         
-        if not results:
-            return "I couldn't find any relevant information in the documents to answer your question."
-        
-        # Create a response based on the retrieved documents
-        response = "Here's what I found in your documents:\n\n"
-        
-        for i, doc in enumerate(results):
-            doc_type = doc.metadata.get("type", "unknown")
-            response += f"**Source {i+1} ({doc_type})**: {doc.page_content}\n\n"
-            
-            # Add original content summary if available
-            if "original_data" in doc.metadata:
-                # Truncate if too long
-                orig_data = doc.metadata["original_data"]
-                if isinstance(orig_data, str):
-                    if len(orig_data) > 150:
-                        orig_data = orig_data[:150] + "..."
-                    response += f"*From original content: {orig_data}*\n\n"
-                else:
-                    response += f"*Original content available (non-text)*\n\n"
-        
-        return response
+        return results
         
     except Exception as e:
         logger.error(f"Error retrieving documents: {e}", exc_info=True)
         return f"Error processing your query: {str(e)}"
+
+def format_response_text(response):
+    output = ""
+    output += f"Response: {response['response']}\n\n"
+    output += "Context:\n"
+    for text in response['context']['texts']:
+        output += f"{text.text}\n"
+        output += f"Page number: {text.metadata.page_number}\n"
+        output += "-" * 50 + "\n"
+
+    return output
+
+def display_response_images(response):
+    for image in response['context']['images']:
+        display_image(image)
+
 
 # Main function
 def main():
@@ -321,10 +349,15 @@ def main():
                     with st.chat_message("assistant"):
                         with st.spinner("Searching documents..."):
                             response = chat_with_documents(user_query, embeddings_generator)
-                            st.markdown(response)
-                            
-                            # Add assistant message to chat history
-                            st.session_state['chat_history'].append({"role": "assistant", "content": response})
+                            #st.markdown(response)
 
+                            ## DISPLAY TEXT ##       
+                            response_text = format_response_text(response)                                                 
+                            # Add assistant message to chat history
+                            st.session_state['chat_history'].append({"role": "assistant", "content": response_text})
+
+                            ## DISPLAY IMAGES ##       
+                            display_response_images(response)  
+                            
 if __name__ == "__main__":
     main()

@@ -2,12 +2,13 @@ import os
 import logging
 import sqlite3
 
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class SQLiteStore:
+class SQLiteStore():
     """
     Persistent docstore using SQLite to store original documents.
     Each document is saved with a unique identifier and its content.
