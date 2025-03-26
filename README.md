@@ -45,11 +45,11 @@ rag_project/
 ├── app.py                      # Main Streamlit application
 ├── requirements.txt            # Project dependencies
 │
-├── modules/
+├── src/
 │   ├── __init__.py
 │   ├── pdf_processor.py        # PDF to markdown conversion
 │   ├── embeddings.py           # Generate embeddings and vector DB
-│   └── query_pipeline.py       # Query processing pipeline
+│   └── chat_processor.py       # Handle user queries
 │
 └── data/
     ├── pdfs/                   # Directory for input PDF files
@@ -69,19 +69,19 @@ rag_project/
 - Supports both OpenAI and local embeddings models
 - Stores embeddings in a Chroma vector database
 
-### 3. Query Pipeline
+### 3. Chat Processor
 - Processes user queries using LangChain's ConversationalRetrievalChain
 - Retrieves relevant document chunks based on semantic similarity
 - Maintains conversation context for follow-up questions
 
-### 4. Streamlit Interface
+### 4. <u>App.py</u>: Streamlit Interface
 - Provides an intuitive chat interface
 - Allows users to upload and process PDF files
 - Displays answers and source documents
 
 ## Dependencies
 
-- **Python 3.8+**
+- **Python 3.12+**
 - **LangChain**: For RAG functionality
 - **OpenAI API**: For embeddings and language model
 - **Chroma DB**: For vector storage
@@ -108,35 +108,3 @@ graph LR
     D --> E[Otra Neurona]
 ```
 
-├── README.md
-├── app.log
-├── app.py
-├── data
-│   ├── database
-│   │   ├── sql
-│   │   ├── vector_db
-│   ├── markdown
-│   │   ├── pdf_de_prueba.md
-│   │   └── sample-tables.md
-│   ├── pdfs
-│   │   ├── RECETA_DE_LA_PAELLA.pdf
-│   │   ├── The State of LLM Reasoning Models.pdf
-│   │   ├── pdf_de_prueba.pdf
-│   │   └── sample-tables.pdf
-│   ├── prompts
-│      ├── summary_image.txt
-│      └── summary_text.txt
-│   
-├── notebook
-│   └── pdf_converter.ipynb
-├── requirements.txt
-├── .env
-└── src
-    ├── __init__.py
-    ├── __pycache__
-    │   ├── __init__.cpython-312.pyc
-    │   ├── embeddings.cpython-312.pyc
-    │   └── pdf_processor.cpython-312.pyc
-    ├── embeddings.py
-    └── pdf_processor.py
-    └── sqlite_processor.py    

@@ -10,10 +10,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 
 import uuid
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.storage import InMemoryStore
 from langchain.schema import Document
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain.retrievers.multi_vector import MultiVectorRetriever
 
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
@@ -75,7 +75,8 @@ class EmbeddingsGenerator:
                     
                 self.embeddings = OpenAIEmbeddings(
                     model="text-embedding-3-small",
-                    openai_api_key=OPENAI_API_KEY
+                    api_key=OPENAI_API_KEY
+                    #openai_api_key=OPENAI_API_KEY
                 )
                 logger.info(f"Initialized OpenAI embedding model: text-embedding-3-small")
             else:
@@ -111,7 +112,16 @@ class EmbeddingsGenerator:
         except Exception as e:
             logger.error(f"Unexpected error during initialization: {e}")
             raise
-
+    
+    def count_docstore_elements(self):
+        """
+        Counts the number of elements stored in the docstore.
+            
+        Returns:
+            int: number of elements stored in the docstore.
+        """
+        return sum(1 for _ in self.retriever.docstore.yield_keys())
+    
     def load_prompt(self, file_path):
         """
         Load a prompt from a file.
@@ -132,8 +142,7 @@ class EmbeddingsGenerator:
                 raise FileNotFoundError(f"Prompt file not found: {file_path}")
                 
             with open(file_path, "r", encoding="utf-8") as f:
-                prompt = f.read().strip()
-                
+                prompt = f.read().strip()                
             return prompt
         except FileNotFoundError as e:
             logger.error(f"Prompt file not found: {e}")
@@ -286,71 +295,6 @@ class EmbeddingsGenerator:
         except Exception as e:
             logger.error(f"Error summarizing images: {e}")
 
-    # def persist_data_langchain(self, text_summaries, table_summaries, image_summaries,
-    #                            original_texts, original_tables, original_images):
-    #     """
-    #     Persist summaries in the Chroma vector store and original data in SQLite.
-    #     Generates a unique identifier for each document, creates Document objects,
-    #     and associates the originals in the document store.
-        
-    #     Args:
-    #         text_summaries (list): List of text summaries
-    #         table_summaries (list): List of table summaries
-    #         image_summaries (list): List of image summaries
-    #         original_texts (list): List of original texts
-    #         original_tables (list): List of original tables
-    #         original_images (list): List of original images
-            
-    #     Returns:
-    #         tuple: (vectorstore, docstore) - The configured stores
-            
-    #     Raises:
-    #         RuntimeError: If persistence fails
-    #     """
-    #     try:
-    #         id_key = self.id_key
-
-    #         def add_documents(summaries, originals, content_type):
-    #             """Helper function to add documents to both stores"""
-    #             if not summaries or not originals:
-    #                 logger.info(f"No {content_type} to persist")
-    #                 return
-                
-    #             if len(summaries) != len(originals):
-    #                 logger.warning(
-    #                     f"Mismatch between {content_type} summaries ({len(summaries)}) " 
-    #                     f"and originals ({len(originals)})"
-    #                 )
-                
-    #             # Generate unique IDs for each document
-    #             doc_ids = [str(uuid.uuid4()) for _ in range(len(summaries))]
-                
-    #             # Create Document objects with summaries and metadata
-    #             docs = [
-    #                 Document(page_content=summary, metadata={id_key: doc_ids[i], "type": content_type})
-    #                 for i, summary in enumerate(summaries)
-    #             ]
-                
-    #             # Persist summaries in Chroma vector store
-    #             self.retriever.vectorstore.add_documents(docs)
-                
-    #             # Persist original data in SQLite docstore
-    #             doc_pairs = list(zip(doc_ids, originals))
-    #             self.retriever.docstore.mset(doc_pairs)
-                
-    #             logger.info(f"{content_type.capitalize()} persisted: {len(docs)} documents")
-
-    #         # Process each content type
-    #         add_documents(text_summaries, original_texts, "text")
-    #         add_documents(table_summaries, original_tables, "table")
-    #         add_documents(image_summaries, original_images, "image")
-
-    #         # Return both components for retrieval
-    #         return self.retriever.docstore, self.retriever.docstore
-
-    #     except Exception as e:
-    #         logger.error(f"Error persisting data using Langchain: {e}")
-    #         raise RuntimeError(f"Data persistence failed: {e}")
 
     def persist_data_langchain(self, text_summaries, table_summaries, image_summaries,
                                original_texts, original_tables, original_images):
@@ -471,7 +415,7 @@ class EmbeddingsGenerator:
     
         # construct prompt with context (including images)
         prompt_template = f"""
-        Responde la pregunta basándote únicamente en el siguiente contexto, que puede incluir texto, tablas y imágenes.
+        Responde la pregunta basándote únicamente en el siguiente contexto, que puede incluir texto, tablas e imágenes.
         Contexto: {context_text}
         Pregunta: {user_question}
         """

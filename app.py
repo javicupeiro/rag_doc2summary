@@ -17,6 +17,12 @@ import io
 from src.pdf_processor import PDFProcessor
 from src.embeddings import EmbeddingsGenerator
 
+
+# The next code avoids some problems during init time between Streamlit and Torch
+# Fix the path attribute of torch.classes to prevent problematic inspection
+import torch
+torch.classes.__path__ = [os.path.join(torch.__path__[0], torch.classes.__file__)]
+
 # Load environment variables
 load_dotenv()
 
@@ -203,7 +209,7 @@ def chat_with_documents(query, embeddings_generator):
     """Retrieve and display relevant document chunks based on the query."""
     try:
         results = embeddings_generator.process_user_query(query)
-        
+        print(f"Result: {results}")
         return results
         
     except Exception as e:
@@ -300,7 +306,7 @@ def main():
             if embeddings_generator:
                 st.subheader("Document Store Status")
                 try:
-                    doc_count = embeddings_generator.docstore.count()
+                    doc_count = embeddings_generator.count_docstore_elements()
                     st.info(f"Document store contains {doc_count} documents.")
                 except Exception as e:
                     st.warning(f"Could not retrieve document count: {str(e)}")
@@ -315,7 +321,7 @@ def main():
             # Check if documents are available for chat
             doc_count = 0
             try:
-                doc_count = embeddings_generator.docstore.count()
+                doc_count = embeddings_generator.count_docstore_elements()
             except:
                 pass
                 
@@ -349,15 +355,15 @@ def main():
                     with st.chat_message("assistant"):
                         with st.spinner("Searching documents..."):
                             response = chat_with_documents(user_query, embeddings_generator)
-                            #st.markdown(response)
-
                             ## DISPLAY TEXT ##       
-                            response_text = format_response_text(response)                                                 
+                            response_text = format_response_text(response) 
+                            st.markdown(response_text)
+                            ## DISPLAY IMAGES ##       
+                            display_response_images(response)                                                                              
                             # Add assistant message to chat history
                             st.session_state['chat_history'].append({"role": "assistant", "content": response_text})
 
-                            ## DISPLAY IMAGES ##       
-                            display_response_images(response)  
+                            
                             
 if __name__ == "__main__":
     main()
