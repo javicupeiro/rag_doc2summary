@@ -5,3 +5,4 @@ notebook/*
 app.log
 data/database/sql/*
 data/database/vector_db/*
+.DS_Store

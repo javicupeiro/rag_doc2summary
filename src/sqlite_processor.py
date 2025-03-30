@@ -113,7 +113,7 @@ class SQLiteStore():
             ids = [ids]
 
         placeholders = ','.join('?' for _ in ids)
-        query = f"SELECT id, original_data FROM documents WHERE id IN ({placeholders})"
+        query = f"SELECT doc_id, content FROM docstore WHERE doc_id IN ({placeholders})"
 
         try:
             conn = sqlite3.connect(self.db_path)

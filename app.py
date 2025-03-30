@@ -259,16 +259,16 @@ def main():
             # Document store status
             if embeddings_generator:
                 st.subheader("Document Store Status")
-                # Button to clear all stored data
-                st.warning("⚠️ Esta acción eliminará todos los documentos procesados de las bases de datos.")
-                if st.button("🗑️ Borrar toda la información de la base de datos"):
-                    try:                        
-                        embeddings_generator.clear_databases()
-                        st.success("✅ Todas las bases de datos han sido limpiadas exitosamente.")
-                        st.session_state['pdf_processed'] = False
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error al borrar las bases de datos: {str(e)}")
+                # # Button to clear all stored data
+                # st.warning("⚠️ Esta acción eliminará todos los documentos procesados de las bases de datos.")
+                # if st.button("🗑️ Borrar toda la información de la base de datos"):
+                #     try:                        
+                #         embeddings_generator.clear_databases()
+                #         st.success("✅ Todas las bases de datos han sido limpiadas exitosamente.")
+                #         st.session_state['pdf_processed'] = False
+                #         st.rerun()
+                #     except Exception as e:
+                #         st.error(f"❌ Error al borrar las bases de datos: {str(e)}")
 
                 try:
                     doc_count = embeddings_generator.count_docstore_elements()
@@ -319,22 +319,40 @@ def main():
                     # Process the query and display results
                     with st.chat_message("assistant"):
                         with st.spinner("Searching documents..."):
-                            response = chat_with_documents(user_query, embeddings_generator)
+                            answer_text = chat_with_documents(user_query, embeddings_generator)
                             # Display LLM response        
                             #response_text = format_response_text(response) 
-                            st.markdown(response)
+                            #st.markdown(answer_text)
 
                             # Get context data
                             text_context, img_context = embeddings_generator.get_retrieved_context_data()
                             # Display context text
-                            print(f"text_context: {text_context}")
-                            # Display context image
-                            print(f"img_context: {img_context}")
-                            for img in img_context:
-                                display_image(img)
+                            # print(f"text_context: {text_context}")
+                            # # Display context image
+                            # print(f"img_context: {img_context}")
+                            # for img in img_context:
+                            #     display_image(img)
+
+                            # 2. LLM Response (label + content)
+                            st.markdown("**Response from the LLM:**")
+                            st.markdown(answer_text)
+                        
+                            # 3. Separator line
+                            st.markdown("---")
+                        
+                            # 4. Context label
+                            st.markdown("**Context:**")
+                            # 4a. Text context as bullet points
+                            if text_context:
+                                bullets_md = "\n".join(f"- {point}" for point in text_context)
+                                st.markdown(bullets_md)
+                            # 4b. Image context (display images inline)
+                            if img_context:
+                                for img in img_context:
+                                    display_image(img)
 
                             # Add assistant message to chat history
-                            st.session_state['chat_history'].append({"role": "assistant", "content": response})
+                            st.session_state['chat_history'].append({"role": "assistant", "content": answer_text})
 
                             
                             

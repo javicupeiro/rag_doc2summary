@@ -6,6 +6,7 @@ import uuid
 import chromadb
 from chromadb.config import Settings
 from src.sqlite_processor import SQLiteStore
+#from sqlite_processor import SQLiteStore
 import openai
 from openai import AzureOpenAI, OpenAI
 from groq import Groq
@@ -306,6 +307,7 @@ class EmbeddingsGenerator:
                ids=doc_ids
            )
            # Persist the original content in SQLite
+           logger.info(f"Originales: {originals}")
            logger.info(f"Persisting the original content in SQLite...")
            self.docstore.mset(list(zip(doc_ids, originals)))
            logger.info(f"{content_type.capitalize()} persisted: {len(summaries)} documents")
@@ -344,6 +346,7 @@ class EmbeddingsGenerator:
                 original_data_dict = self.docstore.get(doc_ids)
                 for doc in docs:
                     doc_id = doc["metadata"].get("doc_id")
+                    logger.info(f"***\nOriginal data: {doc_id}: {original_data_dict.get(doc_id)}")
                     doc["metadata"]["original_data"] = original_data_dict.get(doc_id)
             logger.info(f"Retrieved {len(docs)} documents for query: '{query}'.")
             return docs
@@ -403,29 +406,38 @@ class EmbeddingsGenerator:
         """
         Build a prompt message using the retrieved context (text and images).
         """
+        logger.info(f"Building prompt...")
         docs_by_type = self.parse_docs(docs)
         # Combine text contents from documents as context
         context_text = " ".join([doc["page_content"]
-                                 for doc in docs if doc["metadata"].get("type") in ("text", "table")])
-        prompt_template = (
-            f"Responde la pregunta basándote únicamente en el siguiente contexto, "
-            f"que puede incluir texto, tablas e imágenes.\nContexto: {context_text}\n"
-            f"Pregunta: {user_query}"
+                                 for doc in docs 
+                                 if doc["metadata"].get("type") in ("text", "table")])
+        
+        summary_prompt_path = os.path.join(PROMPT_DIR, 'user_query.txt')
+        summary_prompt_template = self.load_prompt(summary_prompt_path)
+
+        filled_prompt = summary_prompt_template.format(
+            context_text=context_text,
+            user_query=user_query
         )
         prompt_message = [
             {
                 "role": "system",
                 "content": "Responde a la pregunta en español basándote únicamente en el contexto proporcionado."
             },
-            {"role": "user", "content": prompt_template}
+            {"role": "user", "content": filled_prompt}
         ]
         # If images are present, attach them 
         if docs_by_type["images"]:
             for img in docs_by_type["images"]:
                 prompt_message.append({
                     "role": "user",
-                    "content": {"type": "image_url", "image_url": f"data:image/jpeg;base64,{img}"}
+                    "content": [
+                        #{"type": "text", "text": "Analiza la siguiente imagen:"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}}
+                    ]
                 })
+        logger.info(f"Final prompt: {prompt_message}")
         return prompt_message
 
     def process_user_query(self, 
@@ -438,6 +450,7 @@ class EmbeddingsGenerator:
         # Retrieve data
         self.retrieved_docs = self.retrieve_data(user_query, k=k)
         # Build prompt
+        logger.info(f"Retrieved docs: {self.retrieved_docs}")
         prompt_message = self.build_prompt(user_query, self.retrieved_docs)
         # Send prompt
         response = self.azure_openai_query(prompt_message)

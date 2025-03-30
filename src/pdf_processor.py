@@ -61,7 +61,7 @@ class PDFProcessor:
                 # Check if this is a composite element (contains multiple elements)
                 if "CompositeElement" in str(type(chunk)):
                     # Add text to the text list
-                    self.texts.append(chunk)
+                    self.texts.append(chunk.text)
                     
                     # Process original elements in the chunk
                     chunk_els = chunk.metadata.orig_elements
