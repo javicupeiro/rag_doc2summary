@@ -95,7 +95,7 @@ class SQLiteStore():
              logger.error(f"Error storing documents: {e}")
              return False
      
-    def get(self, doc_id):
+    def get(self, ids):
         """
         Retrieve a document by its ID.
         
@@ -105,22 +105,29 @@ class SQLiteStore():
         Returns:
             str: The document content or None if not found
         """
+        if not ids:
+            return {}
+
+        # Ensure ids is a list (if a single str is passed)
+        if isinstance(ids, str):
+            ids = [ids]
+
+        placeholders = ','.join('?' for _ in ids)
+        query = f"SELECT id, original_data FROM documents WHERE id IN ({placeholders})"
+
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute('SELECT content FROM docstore WHERE doc_id = ?', (doc_id,))
-            row = cursor.fetchone()
-            conn.close()
-            
-            return row[0] if row else None
-            
+            cursor.execute(query, ids)
+            rows = cursor.fetchall()
+
+            # Return a dictionary {id: original_data}
+            return {row[0]: row[1] for row in rows}
         except sqlite3.Error as e:
-            logger.error(f"SQLite error retrieving document {doc_id}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Error retrieving document {doc_id}: {e}")
-            return None
-    
+            logging.error(f"SQLite error retrieving document {ids}: {e}")
+            return {}
+
+
     def delete(self, doc_id):
         """
         Delete a document by its ID.
@@ -170,3 +177,39 @@ class SQLiteStore():
         except Exception as e:
             logger.error(f"Error counting documents: {e}")
             return 0
+        
+    def clear_sqlite_data(self,db_path="processed_files.db"):    
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM files")
+        cursor.execute("DELETE FROM summaries")
+        conn.commit()
+        conn.close()
+        
+    def clear_sqlite_data(self, db_path=None):
+            if db_path is None:
+                db_path = self.db_path
+
+            try:
+                # Connect to the SQLite database
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+
+                # Check if the 'files' table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='files';")
+                table_exists = cursor.fetchone()
+
+                if table_exists:
+                    # If the 'files' table exists, clear its data
+                    cursor.execute("DELETE FROM files;")
+                    conn.commit()
+                    logger.info("Successfully cleared the 'files' table data.")
+                else:
+                    logger.warning("Table 'files' does not exist, skipping clearing.")
+
+                # Close the connection
+                conn.close()
+
+            except sqlite3.Error as e:
+                logger.error(f"SQLite error: {e}")
+                raise

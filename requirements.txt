@@ -1,15 +1,11 @@
-unstructured[all-docs]
 python-dotenv
-langchain 
-langchain-community 
-langchain-chroma>=0.1.2
-langchain-openai 
-langchain-groq
-ipython
+unstructured[all-docs]
 pillow
 lxml
-
-chromadb
+chromadb==0.4.15
 tiktoken
+groq
+
+ipython
 
 streamlit

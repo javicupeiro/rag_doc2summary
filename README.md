@@ -20,12 +20,20 @@ A Retrieval-Augmented Generation (RAG) system built with LangChain that allows y
    ```
    source .venv/bin/activate
    ```
-3. Install the required dependencies:
+4. Install the required dependencies:
    ```
    pip install -r requirements.txt
    ```
-4. Set up your OpenAI API key (either in a .env file or directly in the app)
-5. Run the Streamlit app:
+   and:
+   ```
+   # for linux
+   %sudo apt-get install poppler-utils tesseract-ocr libmagic-dev
+   
+   # for mac
+   %brew install poppler tesseract libmagic
+   ```
+5. Set up your OpenAI API key (either in a .env file or directly in the app)
+6. Run the Streamlit app:
    ```
    streamlit run app.py
    ```

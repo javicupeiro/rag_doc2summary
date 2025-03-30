@@ -134,7 +134,8 @@ def process_pdf(file_path, processor, embeddings_generator):
             # Show an image sample
             if image_chunks:
                 st.subheader("Sample Image")
-                display_image(image_chunks[0])
+                for img in image_chunks:
+                    display_image(img)
         
         # Generate summaries
         with st.spinner("Generating summaries..."):
@@ -152,9 +153,9 @@ def process_pdf(file_path, processor, embeddings_generator):
                     image_summaries = embeddings_generator.summary_images(image_chunks)
                     st.success(f"✅ Generated {len(image_summaries)} image summaries")
                 
-                # Persist the data using Langchain with Chroma and SQLite
+                # Persist the data using Chroma and SQLite
                 with st.spinner("Persisting data to vector store and document store..."):
-                    retriever = embeddings_generator.persist_data_langchain(
+                    retriever = embeddings_generator.persist_data(
                         text_summaries=text_summaries,
                         table_summaries=table_summaries,
                         image_summaries=image_summaries,
@@ -172,64 +173,17 @@ def process_pdf(file_path, processor, embeddings_generator):
                 logger.error(f"Error in summary generation or persistence: {e}", exc_info=True)
                 return False
 
-# Function to chat with the documents
-# def chat_with_documents(query, embeddings_generator):
-#     """Retrieve and display relevant document chunks based on the query."""
-#     try:
-#         results = embeddings_generator.retrieve_data(query, k=3)
-        
-#         if not results:
-#             return "I couldn't find any relevant information in the documents to answer your question."
-        
-#         # Create a response based on the retrieved documents
-#         response = "Here's what I found in your documents:\n\n"
-        
-#         for i, doc in enumerate(results):
-#             doc_type = doc.metadata.get("type", "unknown")
-#             response += f"**Source {i+1} ({doc_type})**: {doc.page_content}\n\n"
-            
-#             # Add original content summary if available
-#             if "original_data" in doc.metadata:
-#                 # Truncate if too long
-#                 orig_data = doc.metadata["original_data"]
-#                 if isinstance(orig_data, str):
-#                     if len(orig_data) > 150:
-#                         orig_data = orig_data[:150] + "..."
-#                     response += f"*From original content: {orig_data}*\n\n"
-#                 else:
-#                     response += f"*Original content available (non-text)*\n\n"
-        
-#         return response
-        
-#     except Exception as e:
-#         logger.error(f"Error retrieving documents: {e}", exc_info=True)
-#         return f"Error processing your query: {str(e)}"
 
-def chat_with_documents(query, embeddings_generator):
+def chat_with_documents(user_query, embeddings_generator):
     """Retrieve and display relevant document chunks based on the query."""
-    try:
-        results = embeddings_generator.process_user_query(query)
+    try:        
+        results = embeddings_generator.process_user_query(user_query)
         print(f"Result: {results}")
         return results
         
     except Exception as e:
         logger.error(f"Error retrieving documents: {e}", exc_info=True)
         return f"Error processing your query: {str(e)}"
-
-def format_response_text(response):
-    output = ""
-    output += f"Response: {response['response']}\n\n"
-    output += "Context:\n"
-    for text in response['context']['texts']:
-        output += f"{text.text}\n"
-        output += f"Page number: {text.metadata.page_number}\n"
-        output += "-" * 50 + "\n"
-
-    return output
-
-def display_response_images(response):
-    for image in response['context']['images']:
-        display_image(image)
 
 
 # Main function
@@ -305,6 +259,17 @@ def main():
             # Document store status
             if embeddings_generator:
                 st.subheader("Document Store Status")
+                # Button to clear all stored data
+                st.warning("⚠️ Esta acción eliminará todos los documentos procesados de las bases de datos.")
+                if st.button("🗑️ Borrar toda la información de la base de datos"):
+                    try:                        
+                        embeddings_generator.clear_databases()
+                        st.success("✅ Todas las bases de datos han sido limpiadas exitosamente.")
+                        st.session_state['pdf_processed'] = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al borrar las bases de datos: {str(e)}")
+
                 try:
                     doc_count = embeddings_generator.count_docstore_elements()
                     st.info(f"Document store contains {doc_count} documents.")
@@ -355,13 +320,21 @@ def main():
                     with st.chat_message("assistant"):
                         with st.spinner("Searching documents..."):
                             response = chat_with_documents(user_query, embeddings_generator)
-                            ## DISPLAY TEXT ##       
-                            response_text = format_response_text(response) 
-                            st.markdown(response_text)
-                            ## DISPLAY IMAGES ##       
-                            display_response_images(response)                                                                              
+                            # Display LLM response        
+                            #response_text = format_response_text(response) 
+                            st.markdown(response)
+
+                            # Get context data
+                            text_context, img_context = embeddings_generator.get_retrieved_context_data()
+                            # Display context text
+                            print(f"text_context: {text_context}")
+                            # Display context image
+                            print(f"img_context: {img_context}")
+                            for img in img_context:
+                                display_image(img)
+
                             # Add assistant message to chat history
-                            st.session_state['chat_history'].append({"role": "assistant", "content": response_text})
+                            st.session_state['chat_history'].append({"role": "assistant", "content": response})
 
                             
                             

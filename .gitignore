@@ -1,3 +1,7 @@
 .env
 .venv
 app.log
+notebook/*
+app.log
+data/database/sql/*
+data/database/vector_db/*

@@ -4,5 +4,3 @@ Si es un gráfico, sé específico y describe los datos.
 Responde solo con la descripción, sin comentarios adicionales.
 No comiences tu mensaje diciendo "Aquí hay una descripción" ni nada similar.
 Simplemente da la descripción tal como es.
-
-Imagen: {element}
