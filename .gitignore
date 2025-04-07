@@ -1,5 +1,6 @@
 .env
 .venv
+.venv2
 app.log
 notebook/*
 app.log
@@ -7,3 +8,6 @@ data/database/sql/*
 data/database/vector_db/*
 .DS_Store
 mi_info
+diagrams
+.drawio
+src/__pycache__/*

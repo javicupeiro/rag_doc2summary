@@ -2,10 +2,12 @@ python-dotenv
 unstructured[all-docs]
 pillow
 lxml
-chromadb==0.4.15
+chromadb
 tiktoken
 groq
-
+openai
 ipython
-
 streamlit
+torch
+transformers
+accelerate
