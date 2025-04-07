@@ -130,7 +130,7 @@ class PDFProcessor:
                 filename=file_path,
                 infer_table_structure=True,  # Extract tables
                 strategy="hi_res",  # Mandatory to infer tables
-                extract_image_block_types=["Image"],  # TODO: Add 'Table' to list to extract image of tables
+                extract_image_block_types=["Image", "Table"],  # TODO: Add 'Table' to list to extract image of tables
                 # image_output_dir_path=output_path,  # If None, images and tables will be saved in base64
                 extract_image_block_to_payload=True,  # If true, will extract base64 for API usage
                 chunking_strategy="by_title",  # Alternative: 'basic'

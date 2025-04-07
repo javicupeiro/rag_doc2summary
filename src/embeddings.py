@@ -5,6 +5,8 @@ import base64
 import uuid
 import chromadb
 from chromadb.config import Settings
+from chromadb import EmbeddingFunction
+from chromadb.api.types import Documents, Embeddings
 from src.sqlite_processor import SQLiteStore
 #from sqlite_processor import SQLiteStore
 import openai
@@ -33,6 +35,56 @@ PROMPT_DIR = os.path.join(os.path.dirname(__file__), "../data/prompts/")
 VECTOR_DB_DIR = os.path.join(os.path.dirname(__file__), "../data/database/vector_db/vector_db")
 SQL_DB_DIR = os.path.join(os.path.dirname(__file__), "../data/database/sql/docstore.db")
 
+class OpenAIEmbeddingFunction(EmbeddingFunction):
+    """
+    Custom embedding function using OpenAI's API, conforming to ChromaDB's interface.
+    """
+    def __init__(self, 
+                 api_key: str, 
+                 model_name: str = "text-embedding-3-small"):
+        if not api_key:
+            raise ValueError("OpenAI API Key not found.")
+        
+        # It's generally better practice to initialize the client within the class
+        # that uses it directly, especially if this class might be used independently.
+        self._client = OpenAI(api_key=api_key) 
+        self._model_name = model_name
+        logger.info(f"Initialized OpenAIEmbeddingFunction with model: {self._model_name}")
+
+    # This is the required method by ChromaDB's EmbeddingFunction interface
+    def __call__(self, input: Documents) -> Embeddings:
+        """
+        Generates embeddings for a list of documents.
+
+        Args:
+            input (Documents): A list of strings to embed.
+
+        Returns:
+            Embeddings: A list of embeddings (list of lists of floats).
+        """
+        if not isinstance(input, list):
+             # Although ChromaDB should always pass a list, adding a safeguard
+             logger.warning("Input to embedding function was not a list. Converting.")
+             input = [str(input)] # Ensure it's a list of strings
+
+        if not input:
+             return [] # Handle empty input list
+
+        try:
+            logger.debug(f"Generating embeddings for {len(input)} documents.")
+            response = self._client.embeddings.create(
+                input=input,
+                model=self._model_name
+            )
+            # Extract embeddings from the response
+            embeddings = [item.embedding for item in response.data]
+            logger.debug(f"Successfully generated {len(embeddings)} embeddings.")
+            return embeddings
+        except Exception as e:
+            logger.error(f"Error generating embeddings with OpenAI: {e}", exc_info=True)
+            # Decide how to handle errors: re-raise, return empty, return None?
+            # Re-raising is often best to signal failure upstream.
+            raise
 
 class EmbeddingsGenerator:
     """
@@ -69,12 +121,10 @@ class EmbeddingsGenerator:
             # Initialize the embedding function
             if embedding_model == 'openai':
                 if not OPENAI_API_KEY:
-                    raise ValueError("OpenAI API Key not found in environment variables")
-                # Set the API key for openai
-                openai.api_key = OPENAI_API_KEY
-                self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
-                self.embedding_fn = self.get_embedding
-                logger.info("Initialized OpenAI embedding function")
+                    raise ValueError("OpenAI API Key not found in environment variables")             
+                self.embedding_fn = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY, model_name="text-embedding-3-small")
+                self.openai_client = OpenAI(api_key=OPENAI_API_KEY)                 
+                logger.info("Initialized OpenAI embedding function using custom OpenAIEmbeddingFunction class")
             else:
                 raise NotImplementedError(f"Embedding model '{embedding_model}' not implemented")
 
@@ -346,9 +396,9 @@ class EmbeddingsGenerator:
                 original_data_dict = self.docstore.get(doc_ids)
                 for doc in docs:
                     doc_id = doc["metadata"].get("doc_id")
-                    logger.info(f"***\nOriginal data: {doc_id}: {original_data_dict.get(doc_id)}")
+                    logger.info(f"***\nOriginal data: {doc_id}")
                     doc["metadata"]["original_data"] = original_data_dict.get(doc_id)
-            logger.info(f"Retrieved {len(docs)} documents for query: '{query}'.")
+            logger.info(f"Retrieved {len(docs)} documents for the query.")
             return docs
         except Exception as e:
             logger.error(f"Error retrieving data for query '{query}': {e}")
@@ -437,7 +487,7 @@ class EmbeddingsGenerator:
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}}
                     ]
                 })
-        logger.info(f"Final prompt: {prompt_message}")
+        
         return prompt_message
 
     def process_user_query(self, 
