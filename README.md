@@ -41,19 +41,19 @@ This project implements a Retrieval-Augmented Generation (RAG) system capable of
 
 ## Visuals 📸
 
-*(It's highly recommended to add screenshots of your Streamlit application here)*
 
 **Example: Upload Tab**
 
-![Chat with Docs](img/PDF_PROCESSOR.png)
+<img src="img/PDF_PROCESSOR.png" alt="Chat with Docs" width="400"/>
 
 **Example: Chat Tab with Context**
 
-![Chat with Docs](img/chat_with_docs.png)
+<img src="img/chat_with_docs.png" alt="Chat with Docs" width="400"/>
 
 **Example: Sidebar**
 
-![Chat with Docs](img/sidebar.png)
+<img src="img/sidebar.png" alt="Chat with Docs" width="400"/>
+
 
 ## Technology Stack 🛠️
 
@@ -78,13 +78,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system capable of
         *   **macOS:** `brew install poppler tesseract libmagic`
         *   **Windows:** Requires manual installation. See [unstructured documentation](https://docs.unstructured.io/open-source/installation/installation).
 
-2.  **Clone the Repository:**
-    ```bash
-    git clone <your-repository-url>
-    cd <your-repository-directory>
-    ```
-
-3.  **Create and Activate Virtual Environment:**
+2.  **Create and Activate Virtual Environment:**
     ```bash
     python3 -m venv .venv  # Or python -m venv .venv
     source .venv/bin/activate  # On Windows use `.venv\Scripts\activate`
@@ -94,14 +88,14 @@ This project implements a Retrieval-Augmented Generation (RAG) system capable of
     python3.12 -m venv .venv 
     ```
 
-4.  **Install Python Dependencies:**
+3.  **Install Python Dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
-    Yoy may need to install poppler, tesseract and libmagic, read this file to check if it's needed in your system.
+    <span style="color:orange;">&#9888;</span> <strong>Warning:</strong> You may need to install poppler, tesseract and libmagic, read this file to check if it's needed in your configuration.
 
 
-5.  **Configure Environment Variables:**
+4.  **Configure Environment Variables:**
     Create a file named `.env` in the root directory of the project and add your API keys and Azure configuration:
     ```env
     # Essential Keys
