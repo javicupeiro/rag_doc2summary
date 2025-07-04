@@ -69,13 +69,54 @@ class PDFProcessor:
                         # Extract tables
                         if "Table" in str(type(el)):
                             self.tables.append(el.text)                        
-                        # Extract images as base64
+                        #Extract images as base64
                         if "Image" in str(type(el)):
-                            self.images_b64.append(el.metadata.image_base64)
+                           self.images_b64.append(el.metadata.image_base64)
         except AttributeError as e:
             logger.error(f"Error accessing chunk attributes: {e}")
         except Exception as e:
             logger.error(f"Error processing chunks: {e}")
+
+    # def _process_chunks(self, chunks):
+    #     """
+    #     Process the chunks or raw elements extracted from a PDF.
+
+    #     Args:
+    #         chunks (list): List of elements from partition_pdf
+    #     """
+    #     try:
+    #         for chunk in chunks:
+    #             chunk_type = str(type(chunk))
+
+    #             # CompositeElement (cuando hay chunking)
+    #             if "CompositeElement" in chunk_type:
+    #                 if hasattr(chunk, "text"):
+    #                     self.texts.append(chunk.text)
+    #                 if hasattr(chunk.metadata, "orig_elements"):
+    #                     for el in chunk.metadata.orig_elements:
+    #                         el_type = str(type(el))
+    #                         if "Table" in el_type:
+    #                             self.tables.append(el.text)
+    #                         elif "Image" in el_type and hasattr(el.metadata, "image_base64"):
+    #                             self.images_b64.append(el.metadata.image_base64)
+
+    #             # Procesamiento plano
+    #             else:
+    #                 if "Table" in chunk_type and hasattr(chunk, "text"):
+    #                     self.tables.append(chunk.text)
+    #                 elif "Image" in chunk_type and hasattr(chunk.metadata, "image_base64"):
+    #                     logger.info(f"chunk.metadata attributes: {vars(chunk.metadata)}")
+
+    #                     #if getattr(chunk.metadata, "image_width_px", 1000) > 500: #filtrar imágenes por tamaño
+    #                     #    logger.info(f"image_width_px: {...}")
+    #                     #    self.images_b64.append(chunk.metadata.image_base64)
+    #                 elif ("Text" in chunk_type or "Title" in chunk_type) and hasattr(chunk, "text"):
+    #                     self.texts.append(chunk.text)
+
+    #     except Exception as e:
+    #         logger.error(f"Error processing chunks: {e}")
+
+
 
     def get_chunked_text(self):
         """
@@ -126,6 +167,7 @@ class PDFProcessor:
             logger.info(f"Partitioning PDF: {file_path}")
             
             # Reference: https://docs.unstructured.io/open-source/core-functionality/chunking
+            # Reference2: https://docs.unstructured.io/api-reference/partition/extract-image-block-types
             chunks = partition_pdf(
                 filename=file_path,
                 infer_table_structure=True,  # Extract tables
@@ -139,6 +181,8 @@ class PDFProcessor:
                 new_after_n_chars=6000,
                 # extract_images_in_pdf=True,  # Deprecated
             )
+
+            
             
             # Process the extracted chunks
             self._process_chunks(chunks)

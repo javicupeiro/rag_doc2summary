@@ -126,7 +126,7 @@ def display_image(base64_image, caption=""):
         logger.error(f"Error decoding or displaying image: {e}", exc_info=True)
 
 # --- Core Logic Functions ---
-def process_pdf(file_path, processor, embeddings_generator):
+def process_pdf(file_path, processor, embeddings_generator, summarization_model_choice):
     """Process a PDF file: extract, summarize, and persist."""
     if not processor or not embeddings_generator:
          st.error("Processors not initialized correctly.")
@@ -135,6 +135,11 @@ def process_pdf(file_path, processor, embeddings_generator):
     try:
         st.info(f"Starting processing for: {os.path.basename(file_path)}")
         with st.spinner("Step 1/4: Extracting content from PDF..."):
+            # Clear previous chunks from processor instance before processing a new PDF
+            processor.texts = []
+            processor.tables = []
+            processor.images_b64 = []
+            
             success = processor.process_one_pdf(file_path)
             if not success:
                 st.error(f"Failed to process the PDF file.")
@@ -150,12 +155,16 @@ def process_pdf(file_path, processor, embeddings_generator):
             if table_chunks: st.text_area("Sample Table (as text)", table_chunks[0][:500]+"...", height=100)
             if image_chunks: display_image(image_chunks[0], caption="Sample Image")
 
-        with st.spinner("Step 2/4: Generating summaries..."):
-            text_summaries, table_summaries = embeddings_generator.summary_text_and_tables(text_chunks, table_chunks)
+        with st.spinner(f"Step 2/4: Generating summaries using {summarization_model_choice}..."):
+            text_summaries, table_summaries = embeddings_generator.summary_text_and_tables(
+                text_chunks, 
+                table_chunks,
+                summarization_model_choice=summarization_model_choice # Pass the choice here
+            )
             st.success(f"✅ Summarized: {len(text_summaries)} text, {len(table_summaries)} table chunks.")
             image_summaries = []
             if image_chunks:
-                image_summaries = embeddings_generator.summary_images(image_chunks)
+                image_summaries = embeddings_generator.summary_images(image_chunks) # Image summarization is fixed to Azure OpenAI for now
                 st.success(f"✅ Summarized: {len(image_summaries)} image chunks.")
 
         with st.spinner("Step 3/4: Persisting data to stores..."):
@@ -256,10 +265,12 @@ def main():
         st.session_state['pdf_processed'] = False
     if 'chat_history' not in st.session_state:
         st.session_state['chat_history'] = [] # Store dicts: {"role": "user/assistant", "content": message, "context": context_dict (optional)}
+    if 'selected_summarization_model' not in st.session_state:
+        st.session_state['selected_summarization_model'] = "Groq (Llama3-8b)" # Default value
 
 
     # --- Main App Tabs ---
-    tab1, tab2 = st.tabs(["📤 Upload & Process PDF", "💬 Chat with Documents"])
+    tab1, tab2 = st.tabs(["📤 Sube y Procesa un PDF", "💬 Chatea con los Documentos"])
 
     # == Tab 1: Upload & Process ==
     with tab1:
@@ -297,8 +308,18 @@ def main():
                 except Exception as e:
                     st.error(f"Error listing PDF files: {str(e)}")
                     logger.error(f"Error listing existing PDFs: {e}", exc_info=True)
+            
+            st.header("2. Choose Summarization Model for Texts/Tables")
+            summarization_model_choice = st.selectbox(
+                "Elige el modelo para resúmenes de texto/tabla:",
+                options=["Groq (Llama3-8b)", "GPT4o"],
+                index=["Groq (Llama3-8b)", "GPT4o"].index(st.session_state.get('selected_summarization_model', "Groq (Llama3-8b)")),
+                key="summarization_model_select"
+            )
+            st.session_state['selected_summarization_model'] = summarization_model_choice
 
-            st.header("2. Process Selected PDF")
+
+            st.header("3. Process Selected PDF")
             if pdf_to_process:
                 process_button_disabled = False
             else:
@@ -308,7 +329,12 @@ def main():
             if st.button("🚀 Process PDF", type="primary", key="process_pdf_button", disabled=process_button_disabled):
                 if pdf_to_process:
                     # Process the selected/uploaded PDF
-                    success = process_pdf(pdf_to_process, processor, embeddings_generator)
+                    success = process_pdf(
+                        pdf_to_process, 
+                        processor, 
+                        embeddings_generator,
+                        st.session_state['selected_summarization_model'] # Pass the selected model
+                    )
                     # Clean up temp file if it was created from upload
                     if upload_option == "Upload New PDF" and os.path.exists(pdf_to_process):
                         try:
@@ -340,7 +366,8 @@ def main():
 
             if doc_count == 0 and not st.session_state.get('pdf_processed', False):
                  st.info("No documents found in the database. Please process a PDF on the 'Upload & Process PDF' tab first.")
-                 st.stop() # Stop execution for this tab if no docs
+                 if not st.session_state.get('pdf_processed', False): # Only stop if not even one PDF processed in session
+                    st.stop()
 
             # --- Chat Interface ---
             st.subheader("Conversation")
@@ -364,7 +391,7 @@ def main():
                               with st.expander("Show Context Used"):
                                    st.markdown("**Text/Table Context:**")
                                    if context.get("text_context"):
-                                        bullets_md = "\n".join(f"- {point[:200]}..." if len(point) > 200 else point for point in context["text_context"])
+                                        bullets_md = "\n".join(f"- {str(point)[:200]}..." if len(str(point)) > 200 else str(point) for point in context["text_context"])
                                         st.markdown(bullets_md)
                                    else:
                                         st.markdown("_No text/table context found or used._")
@@ -404,7 +431,7 @@ def main():
                           with st.expander("Show Context Used"):
                                st.markdown("**Text/Table Context:**")
                                if response_data["text_context"]:
-                                    bullets_md = "\n".join(f"- {point[:200]}..." if len(point) > 200 else point for point in response_data["text_context"])
+                                    bullets_md = "\n".join(f"- {str(point)[:200]}..." if len(str(point)) > 200 else str(point) for point in response_data["text_context"])
                                     st.markdown(bullets_md)
                                else:
                                     st.markdown("_No text/table context found or used._")

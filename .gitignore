@@ -7,7 +7,5 @@ app.log
 data/database/sql/*
 data/database/vector_db/*
 .DS_Store
-mi_info
-diagrams
-.drawio
 src/__pycache__/*
+data/pdfs/*

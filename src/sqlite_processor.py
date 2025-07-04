@@ -177,15 +177,7 @@ class SQLiteStore():
         except Exception as e:
             logger.error(f"Error counting documents: {e}")
             return 0
-        
-    def clear_sqlite_data(self,db_path="processed_files.db"):    
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM files")
-        cursor.execute("DELETE FROM summaries")
-        conn.commit()
-        conn.close()
-        
+                
     def clear_sqlite_data(self, db_path=None):
             if db_path is None:
                 db_path = self.db_path

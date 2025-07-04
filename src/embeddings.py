@@ -73,13 +73,31 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
 
         try:
             logger.debug(f"Generating embeddings for {len(input)} documents.")
+            # Filter out any non-string or empty string inputs before sending to API
+            processed_input = [doc for doc in input if isinstance(doc, str) and doc.strip()]
+            if not processed_input:
+                logger.warning("All input documents were empty or non-string after filtering.")
+                # Return empty embeddings for each original input to maintain length consistency if needed by Chroma,
+                # or handle as appropriate for your use case. Here, returning empty for empty valid input.
+                # Chroma might handle mismatch if we return less than expected.
+                # For simplicity, if all are empty, return an empty list.
+                return []
+
+
             response = self._client.embeddings.create(
-                input=input,
+                input=processed_input, # Send only valid, non-empty strings
                 model=self._model_name
             )
             # Extract embeddings from the response
             embeddings = [item.embedding for item in response.data]
-            logger.debug(f"Successfully generated {len(embeddings)} embeddings.")
+            logger.debug(f"Successfully generated {len(embeddings)} embeddings for {len(processed_input)} documents.")
+            
+            # If ChromaDB expects an embedding for every original item, including empty ones,
+            # we might need to map back or insert dummy embeddings.
+            # For now, assume Chroma handles cases where len(embeddings) < len(original_input) if empty strings were filtered.
+            # Or, more robustly, create a placeholder for empty strings if the API can't process them.
+            # Let's assume the current behavior (only embedding non-empty) is acceptable.
+
             return embeddings
         except Exception as e:
             logger.error(f"Error generating embeddings with OpenAI: {e}", exc_info=True)
@@ -136,8 +154,8 @@ class EmbeddingsGenerator:
                 if not OPENAI_API_KEY:
                     raise ValueError("OpenAI API Key not found in environment variables")
                 self.embedding_fn = OpenAIEmbeddingFunction(api_key=OPENAI_API_KEY, model_name="text-embedding-3-small")
-                self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
-                logger.info("Initialized OpenAI embedding function.")
+                self.openai_client = OpenAI(api_key=OPENAI_API_KEY) # Standard OpenAI client
+                logger.info("Initialized OpenAI embedding function and client.")
             else:
                 raise NotImplementedError(f"Embedding model '{embedding_model}' not implemented")
 
@@ -155,37 +173,26 @@ class EmbeddingsGenerator:
             else:
                 logger.info(f"Persistence directory '{self.vector_db_dir}' does not exist. Chroma will create it.")
 
-            # Use PersistentClient for clarity when using on-disk storage.
-            # It handles both loading if path exists and creating if not.
-            # Settings are often implicitly handled by PersistentClient's path argument,
-            # but we can pass them for explicit configuration like telemetry.
             chroma_settings = Settings(
                 anonymized_telemetry=False,
-                is_persistent=True # Explicitly confirm persistence
-                # persist_directory=self.vector_db_dir # This is implicitly set by PersistentClient's path
+                is_persistent=True 
             )
             self.chroma_client = PersistentClient(path=self.vector_db_dir, settings=chroma_settings)
             logger.info("ChromaDB PersistentClient initialized.")
 
-            # Verify connection by listing collections (optional debug step)
             try:
                 existing_collections = self.chroma_client.list_collections()
                 logger.info(f"Available collections after client init: {[c.name for c in existing_collections]}")
             except Exception as e:
                 logger.error(f"Could not list collections after client init: {e}")
-                # This might indicate a deeper problem with the DB state
 
-            # Get or create the specific collection
             collection_name = "multi_modal_rag"
             logger.info(f"Getting or creating collection: '{collection_name}'...")
-            # This is the standard way to ensure the collection exists
             self.vectorstore = self.chroma_client.get_or_create_collection(
                 name=collection_name,
                 embedding_function=self.embedding_fn
-                # metadata={"hnsw:space": "cosine"} # Optional: Specify distance metric
             )
             logger.info(f"Successfully obtained collection '{self.vectorstore.name}'.")
-            # Check count immediately after getting/creating
             logger.info(f"Initial item count in collection '{self.vectorstore.name}': {self.vectorstore.count()}")
 
             # --- Initialize SQLite Document Store ---
@@ -195,14 +202,14 @@ class EmbeddingsGenerator:
 
             # --- Init LLM Clients ---
             logger.info("Initializing LLM clients...")
-            # Init Azure client
+            # Init Azure client (for image summarization)
             self.azure_deployment_name = AZURE_DEPLOYMENT_NAME
             self.azure_client = AzureOpenAI(
                 api_version=AZURE_API_VERSION,
                 api_key=AZURE_API_KEY,
                 azure_endpoint=AZURE_ENDPOINT
             )
-            # Init Groq client
+            # Init Groq client (for text/table summarization if selected)
             if not GROQ_API_KEY:
                 raise ValueError("Groq API Key not found in environment variables")
             self.groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -211,52 +218,16 @@ class EmbeddingsGenerator:
             logger.info("EmbeddingsGenerator initialized successfully.")
 
         except sqlite3.OperationalError as e:
-             # Catch the specific error during initialization
              logger.error(f"SQLite Operational Error during ChromaDB initialization: {e}", exc_info=True)
              logger.error("!!!!! IMPORTANT !!!!!")
              logger.error(f"This usually means the ChromaDB database file at '{os.path.join(abs_vector_db_dir, 'chroma.sqlite3')}' is corrupted or incomplete.")
              logger.error(f"Please STOP the application, COMPLETELY DELETE the directory '{abs_vector_db_dir}' and all its contents, then restart.")
              logger.error("Do NOT just empty it, delete the folder itself.")
              logger.error("!!!!! IMPORTANT !!!!!")
-             raise # Re-raise the error to stop execution
+             raise 
         except Exception as e:
             logger.error(f"Unexpected error during EmbeddingsGenerator initialization: {e}", exc_info=True)
             raise
-
-
-    def get_embedding(self, text):
-        """
-        Get embedding for a given text using OpenAI's API.
-        
-        Args:
-            text (str): The input text.
-            
-        Returns:
-            list: Embedding vector.
-        """
-        try:
-            response = self.openai_client.embeddings.create(
-                input=text,
-                model="text-embedding-3-small" #"text-embedding-ada-002"
-            )
-            # If text is a list, return a list of embeddings for each element.
-            if isinstance(text, list):
-                embeddings = [item.embedding for item in response.data]
-                # Log information from the first embedding (optional)
-                logger.info(f"Batch embedding: Returned {len(embeddings)} embeddings; each of length {len(embeddings[0])}")
-                return embeddings
-            else:
-                embedding = response.data[0].embedding
-                logger.info(f"Embedding type: {type(embedding)}; Length: {len(embedding)}")
-                logger.info(f"Embedding text: {text}")
-                if isinstance(embedding, float):
-                    logger.error("Embedding returned as float for text: " + text)
-                    raise ValueError("Embedding is a float, expected list")
-                return embedding
-        except Exception as e:
-            logger.error(f"Error generating embedding: {e}")
-            raise
-
 
     def count_docstore_elements(self):
         """
@@ -266,7 +237,6 @@ class EmbeddingsGenerator:
             int: Number of elements stored in the docstore.
         """
         return self.docstore.count()
-
 
     def load_prompt(self, file_path: str) -> str:
         """
@@ -292,29 +262,54 @@ class EmbeddingsGenerator:
 
     def call_groq_model(self, prompt: str, content: str) -> str:
         """
-        Call the Groq model directly (stub function).
-        Replace with an actual HTTP request to the Groq API.
+        Call the Groq model for content summarization.
         """
         if not GROQ_API_KEY:
             raise ValueError("Groq API Key not found in environment variables")
         
-        prompt = prompt.format(element=content)
-        logger.info("Calling Groq model (stub) for content summarization")
-        completion = self.groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role":"user",
-                    "content":prompt
-                }
-            ]
-        )        
-        logger.info(f"Groq summarization: {completion.choices[0].message.content}")
-        return completion.choices[0].message.content
+        formatted_prompt = prompt.format(element=content)
+        logger.info("Calling Groq model (llama-3.1-8b-instant) for content summarization")
+        try:
+            completion = self.groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {
+                        "role":"user",
+                        "content": formatted_prompt
+                    }
+                ]
+            )        
+            summary = completion.choices[0].message.content
+            logger.info(f"Groq summarization successful. Length: {len(summary)}")
+            return summary
+        except Exception as e:
+            logger.error(f"Error calling Groq model: {e}", exc_info=True)
+            raise
 
-    def summary_text_and_tables(self, text_list, table_list):
+    def call_openai_for_summary(self, prompt: str, content: str) -> str:
+        """
+        Call the OpenAI model (GPT-4o) for content summarization.
+        """
+        if not self.openai_client: 
+            raise ValueError("OpenAI client not initialized.")
+        
+        formatted_prompt = prompt.format(element=content)
+        logger.info("Calling OpenAI model (gpt-4o) for content summarization")
+        messages_for_api = [
+            {"role": "user", "content": formatted_prompt}
+        ]
+        summary = self.azure_openai_query(messages_for_api)
+        return summary
+    
+
+    def summary_text_and_tables(self, text_list, table_list, summarization_model_choice: str = "Groq (Llama3-8b)"):
             """
-            Generate summaries for text and tables using the Groq model.
+            Generate summaries for text and tables using the chosen model.
+            Args:
+                text_list (list): List of text strings.
+                table_list (list): List of table strings.
+                summarization_model_choice (str): The model to use for summarization 
+                                                  ("Groq (Llama3-8b)" or "GPT4o").
             """
             try:
                 summary_prompt_path = os.path.join(PROMPT_DIR, 'summary_text.txt')
@@ -322,52 +317,69 @@ class EmbeddingsGenerator:
 
                 text_summaries = []
                 if text_list:
-                    logger.info(f"Summarizing {len(text_list)} text elements")
-                    text_summaries = [self.call_groq_model(summary_prompt, txt) for txt in text_list]
+                    logger.info(f"Summarizing {len(text_list)} text elements using {summarization_model_choice}")
+                    if summarization_model_choice == "GPT4o":
+                        text_summaries = [self.call_openai_for_summary(summary_prompt, txt) for txt in text_list]
+                    elif summarization_model_choice == "Groq (Llama3-8b)":
+                        text_summaries = [self.call_groq_model(summary_prompt, txt) for txt in text_list]
+                    else:
+                        raise ValueError(f"Unsupported summarization model: {summarization_model_choice}")
                     logger.info(f"Generated {len(text_summaries)} text summaries")
 
                 table_summaries = []
                 if table_list:
-                    logger.info(f"Summarizing {len(table_list)} table elements")
-                    table_summaries = [self.call_groq_model(summary_prompt, tbl) for tbl in table_list]
+                    logger.info(f"Summarizing {len(table_list)} table elements using {summarization_model_choice}")
+                    if summarization_model_choice == "GPT4o":
+                        table_summaries = [self.call_openai_for_summary(summary_prompt, tbl) for tbl in table_list]
+                    elif summarization_model_choice == "Groq (Llama3-8b)":
+                        table_summaries = [self.call_groq_model(summary_prompt, tbl) for tbl in table_list]
+                    else:
+                        raise ValueError(f"Unsupported summarization model: {summarization_model_choice}")
                     logger.info(f"Generated {len(table_summaries)} table summaries")
 
                 return text_summaries, table_summaries
             except Exception as e:
-                logger.error(f"Error summarizing text and tables: {e}")
+                logger.error(f"Error summarizing text and tables: {e}", exc_info=True)
                 raise
 
     def call_azure_openai_for_image_summary(self, image: str, prompt: str) -> str:
         """
-        Call Azure OpenAI for image summarization (stub function).
-        Replace with an actual API call.
+        Call Azure OpenAI for image summarization.
         """
-        if not OPENAI_API_KEY:
-            raise ValueError("OpenAI API Key not found in environment variables")
-        logger.info("Calling Azure OpenAI (stub) for image summarization")
-        # Validate base64 image format
-        base64.b64decode(image)
-        # Build prompt
-        prompt_message = [
-            { "role": "system", 
-              "content": "Responde a la pregunta en español basándote únicamente en el siguiente contexto, que puede incluir texto, tablas e imágenes." 
-            },
-            {
-              "role": "user",
-              "content": [
-                  {
-                      "type": "text", 
-                      "text": prompt
-                  },
-                  { 
-                      "type": "image_url",
-                      "image_url": {"url": f"data:image/jpeg;base64,{image}"}
-                  }
-              ]
-            }
-        ]
-        response = self.azure_openai_query(prompt_message)
-        return response
+        if not self.azure_client:
+            raise ValueError("Azure OpenAI client not initialized.")
+        logger.info("Calling Azure OpenAI for image summarization")
+        try:
+            # Validate base64 image format
+            base64.b64decode(image) # This will raise an error if invalid
+            
+            prompt_message = [
+                { "role": "system", 
+                  "content": "Responde a la pregunta en español basándote únicamente en el siguiente contexto, que puede incluir texto, tablas e imágenes." 
+                },
+                {
+                  "role": "user",
+                  "content": [
+                      {
+                          "type": "text", 
+                          "text": prompt
+                      },
+                      { 
+                          "type": "image_url",
+                          "image_url": {"url": f"data:image/jpeg;base64,{image}"}
+                      }
+                  ]
+                }
+            ]
+            response_content = self.azure_openai_query(prompt_message)
+            logger.info("Azure OpenAI image summarization successful.")
+            return response_content
+        except base64.binascii.Error as b64e:
+            logger.error(f"Invalid base64 image string for Azure OpenAI: {b64e}", exc_info=True)
+            raise ValueError("Invalid base64 image string provided.") from b64e
+        except Exception as e:
+            logger.error(f"Error calling Azure OpenAI for image summary: {e}", exc_info=True)
+            raise
 
     def summary_images(self, image_list):
         """
@@ -381,13 +393,13 @@ class EmbeddingsGenerator:
             summary_prompt_path = os.path.join(PROMPT_DIR, 'summary_image.txt')
             summary_prompt = self.load_prompt(summary_prompt_path)
             
-            logger.info(f"Summarizing {len(image_list)} images")
+            logger.info(f"Summarizing {len(image_list)} images using Azure OpenAI")
             image_summaries = [self.call_azure_openai_for_image_summary(img, summary_prompt)
                                for img in image_list]
             logger.info(f"Generated {len(image_summaries)} image summaries")
             return image_summaries
         except Exception as e:
-            logger.error(f"Error summarizing images: {e}")
+            logger.error(f"Error summarizing images: {e}", exc_info=True)
             raise
 
     def persist_data(self, text_summaries, table_summaries, image_summaries,
@@ -395,61 +407,70 @@ class EmbeddingsGenerator:
        """
        Persist summaries in the Chromadb vector store and original data in SQLite.
        """
-       # Inner function definition remains the same
        def add_documents(summaries, originals, content_type):
            if not summaries or not originals:
                logger.info(f"No {content_type} to persist")
                return
            if len(summaries) != len(originals):
-               # Log clearly if mismatch happens
                logger.error(
                    f"CRITICAL MISMATCH: Cannot persist {content_type}. "
                    f"Number of summaries ({len(summaries)}) does not match "
                    f"number of originals ({len(originals)}). Aborting add for this type."
                )
-               # Optionally raise an error or just return to prevent adding partial data
-               # raise ValueError(f"Mismatch between {content_type} summaries and originals.")
-               return # Safer to just skip adding this type if counts mismatch
+               return 
 
            logger.info(f"Generating {len(summaries)} unique IDs for {content_type} documents...")
+           # Ensure doc_ids are strings, as Chroma expects. uuid.uuid4() returns UUID objects.
            doc_ids = [str(uuid.uuid4()) for _ in range(len(summaries))]
+
 
            logger.info(f"Preparing {len(summaries)} metadata entries for {content_type}...")
            metadatas = [{"doc_id": doc_ids[i], "type": content_type} for i in range(len(summaries))]
 
            try:
-               # Add summaries to Chromadb
                logger.info(f"Adding {len(summaries)} '{content_type}' summaries to Chromadb collection '{self.vectorstore.name}'...")
-               # Make sure summaries is a list of strings
-               if not all(isinstance(s, str) for s in summaries):
-                   logger.warning(f"Detected non-string elements in '{content_type}' summaries. Attempting conversion.")
-                   summaries = [str(s) for s in summaries]
+               # Ensure summaries are strings
+               valid_summaries = [str(s) for s in summaries if isinstance(s, (str, bytes)) and str(s).strip()]
+               valid_metadatas = [metadatas[i] for i, s in enumerate(summaries) if isinstance(s, (str, bytes)) and str(s).strip()]
+               valid_doc_ids = [doc_ids[i] for i, s in enumerate(summaries) if isinstance(s, (str, bytes)) and str(s).strip()]
+               
+               if not valid_summaries:
+                   logger.warning(f"No valid (non-empty string) summaries found for {content_type}. Skipping add to Chromadb.")
+               else:
+                   self.vectorstore.add(
+                       documents=valid_summaries,
+                       metadatas=valid_metadatas,
+                       ids=valid_doc_ids # Ensure these IDs match the ones used for SQLite
+                   )
+                   logger.info(f"Successfully added {len(valid_summaries)} '{content_type}' summaries to Chromadb.")
+                   logger.info(f"Collection count is now: {self.vectorstore.count()}")
 
-               self.vectorstore.add(
-                   documents=summaries,
-                   metadatas=metadatas,
-                   ids=doc_ids
-               )
-               logger.info(f"Successfully added {len(summaries)} '{content_type}' summaries to Chromadb.")
-               logger.info(f"Collection count is now: {self.vectorstore.count()}")
+               # Persist the original content in SQLite using all original doc_ids and originals
+               # This ensures that even if a summary was empty, the original is stored.
+               logger.info(f"Persisting {len(originals)} original '{content_type}' items in SQLite...")
+               # Prepare (doc_id, original_content) pairs. Original content should be string.
+               sqlite_data = []
+               for i in range(len(doc_ids)): # Iterate using the full list of generated doc_ids
+                   original_content = originals[i]
+                   if not isinstance(original_content, str):
+                       original_content = str(original_content) # Ensure it's a string for SQLite
+                   sqlite_data.append((doc_ids[i], original_content))
 
+               if sqlite_data:
+                   self.docstore.mset(sqlite_data)
+                   logger.info(f"Successfully persisted {len(sqlite_data)} original '{content_type}' items in SQLite.")
+               else:
+                   logger.warning(f"No original {content_type} items to persist in SQLite.")
 
-               # Persist the original content in SQLite
-               logger.info(f"Persisting {len(summaries)} original '{content_type}' items in SQLite...")
-               # Ensure originals are suitable for SQLite (likely strings or bytes if images)
-               # No major change needed here assuming mset handles the data types
-               self.docstore.mset(list(zip(doc_ids, originals)))
-               logger.info(f"Successfully persisted {len(summaries)} original '{content_type}' items in SQLite.")
 
            except sqlite3.OperationalError as e:
                logger.error(f"SQLite Operational Error during ChromaDB ADD operation: {e}", exc_info=True)
                logger.error(f"This likely means the DB state is inconsistent. Path: {self.vector_db_dir}")
-               raise # Re-raise to signal failure
+               raise 
            except Exception as e:
                logger.error(f"Error adding {content_type} documents to stores: {e}", exc_info=True)
-               raise # Re-raise other errors
+               raise 
 
-       # --- Call add_documents for each type ---
        try:
            logger.info("Persisting text data...")
            add_documents(text_summaries, original_texts, "text")
@@ -461,16 +482,12 @@ class EmbeddingsGenerator:
            add_documents(image_summaries, original_images, "image")
 
            logger.info("Data persistence process completed.")
-           # Return vectorstore and docstore for further retrieval if needed.
            return self.vectorstore, self.docstore
 
        except Exception as e:
-           # Catch errors from the add_documents calls
            logger.error(f"Error during data persistence phase: {e}", exc_info=True)
-           # Depending on requirements, you might want to raise this or handle it
            raise
 
- 
     def retrieve_data(self, query: str, k: int = 3):
         """
         Retrieve documents by performing a similarity search in the vector store
@@ -478,51 +495,48 @@ class EmbeddingsGenerator:
 
         Returns a list of dicts with keys "page_content" and "metadata".
         """
-        logger.info(f"Retrieving top {k} documents for query: '{query[:100]}...'") # Log snippet of query
+        logger.info(f"Retrieving top {k} documents for query: '{query[:100]}...'") 
         try:
-            # Query Chromadb directly
             logger.info(f"Querying Chroma collection '{self.vectorstore.name}'...")
             result = self.vectorstore.query(
                 query_texts=[query],
                 n_results=k,
-                include=["documents", "metadatas"] # Only request needed fields
+                include=["documents", "metadatas"] 
             )
             logger.info(f"Chroma query returned {len(result.get('ids', [[]])[0])} results.")
 
-            # Process results carefully, checking structure
             docs = []
-            retrieved_ids = result.get("ids", [[]])[0] # Get list of IDs or empty list
-            retrieved_docs = result.get("documents", [[]])[0]
+            retrieved_ids = result.get("ids", [[]])[0] 
+            retrieved_docs_content = result.get("documents", [[]])[0] # These are the summaries
             retrieved_metadatas = result.get("metadatas", [[]])[0]
 
             if not retrieved_ids:
                  logger.warning(f"Chroma query for '{query[:50]}...' returned no results.")
-                 return [] # Return empty list if no results
+                 return [] 
 
-            if not (len(retrieved_ids) == len(retrieved_docs) == len(retrieved_metadatas)):
+            if not (len(retrieved_ids) == len(retrieved_docs_content) == len(retrieved_metadatas)):
                 logger.error("Mismatch in lengths of retrieved ids, documents, and metadatas from Chroma query!")
-                # Handle this inconsistency - perhaps return empty or try to process matched pairs
-                return [] # Safer to return empty
+                return [] 
 
             logger.info(f"Processing {len(retrieved_ids)} retrieved items from Chroma.")
-            doc_id_map = {} # To store doc_ids needed from SQLite
+            doc_id_map = {} 
             for i in range(len(retrieved_ids)):
-                chroma_id = retrieved_ids[i]
-                doc_text = retrieved_docs[i]
+                chroma_id = retrieved_ids[i] # This is the ID used in Chroma (the UUID)
+                summary_text = retrieved_docs_content[i] # This is the summary
                 meta = retrieved_metadatas[i]
 
-                doc_entry = {"page_content": doc_text, "metadata": meta}
+                # page_content for RAG should ideally be the summary, or potentially original if preferred
+                # For now, let's keep 'page_content' as the summary used for retrieval
+                doc_entry = {"page_content": summary_text, "metadata": meta}
                 docs.append(doc_entry)
 
-                # Get the specific doc_id stored in metadata for SQLite lookup
-                sqlite_doc_id = meta.get("doc_id")
+                sqlite_doc_id = meta.get("doc_id") # This is the UUID linking to SQLite
                 if sqlite_doc_id:
-                    doc_id_map[sqlite_doc_id] = None # Just need the keys
+                    doc_id_map[sqlite_doc_id] = None 
                 else:
                     logger.warning(f"Retrieved item with Chroma ID '{chroma_id}' is missing 'doc_id' in metadata.")
 
 
-            # Retrieve original data from SQLite using stored doc_ids
             sqlite_doc_ids_to_fetch = list(doc_id_map.keys())
             original_data_dict = {}
             if sqlite_doc_ids_to_fetch:
@@ -532,36 +546,30 @@ class EmbeddingsGenerator:
                     logger.info(f"Successfully fetched {len(original_data_dict)} items from SQLite.")
                 except Exception as e:
                     logger.error(f"Error fetching data from SQLite store: {e}", exc_info=True)
-                    # Decide how to proceed - maybe continue without original data?
             else:
                 logger.warning("No valid 'doc_id' found in retrieved metadata to fetch from SQLite.")
 
 
-            # Add original data back to the docs list
             for doc in docs:
-                doc_id = doc["metadata"].get("doc_id")
-                if doc_id in original_data_dict:
-                    doc["metadata"]["original_data"] = original_data_dict[doc_id]
-                    # logger.debug(f"Attached original data for doc_id: {doc_id}")
+                sqlite_doc_id = doc["metadata"].get("doc_id")
+                if sqlite_doc_id in original_data_dict:
+                    doc["metadata"]["original_data"] = original_data_dict[sqlite_doc_id]
                 else:
-                    # This case covers if doc_id was missing or SQLite fetch failed for it
                     doc["metadata"]["original_data"] = None
-                    if doc_id: # Only log warning if we expected data
-                       logger.warning(f"Original data not found in SQLite results for doc_id: {doc_id}")
+                    if sqlite_doc_id: 
+                       logger.warning(f"Original data not found in SQLite results for doc_id: {sqlite_doc_id}")
 
 
             logger.info(f"Successfully retrieved and processed {len(docs)} documents for the query.")
             return docs
 
         except sqlite3.OperationalError as e:
-            # Catch specific error during query
             logger.error(f"SQLite Operational Error during ChromaDB QUERY operation: {e}", exc_info=True)
             logger.error(f"This likely means the DB state is inconsistent. Path: {self.vector_db_dir}")
             raise
         except Exception as e:
             logger.error(f"Error retrieving data for query '{query[:50]}...': {e}", exc_info=True)
             raise
-
 
     def parse_docs(self, docs):
         """
@@ -570,68 +578,94 @@ class EmbeddingsGenerator:
         Returns a dictionary {"images": [...], "texts": [...]}.
         """
         images = []
-        texts = [] # This 'texts' list isn't directly used in the corrected build_prompt context
-                  # but the function correctly separates images based on original_data.
+        texts_from_originals = [] 
         for doc in docs:
-            # CRUCIAL: Use 'original_data' from metadata
             original = doc.get("metadata", {}).get("original_data")
+            doc_type = doc.get("metadata", {}).get("type") # Get content type
 
             if not original:
-                # logger.debug("Document lacks original_data in metadata, cannot parse type.")
-                continue # Skip if no original data to parse
+                continue 
 
-            # Attempt to decode. If it works, assume image. Otherwise, assume text.
-            try:
-                # Add strict=True for more robust validation if needed
-                base64.b64decode(original, validate=True)
-                # Check if it's likely a string representation of an image
-                if isinstance(original, str) and original.startswith(('data:image', '/9j/')):# Common base64 image starts
-                     images.append(original)
-                     # logger.debug("Identified image based on base64 decode.")
-                elif isinstance(original, bytes): # If original data was stored as bytes
-                     images.append(base64.b64encode(original).decode('utf-8')) # Re-encode to base64 string
-                     # logger.debug("Identified image (from bytes) based on base64 decode.")
-                else:
-                     # Decoded successfully but doesn't look like image string/bytes? Treat as text.
-                     if isinstance(original, str):
-                         texts.append(original)
-                     # logger.debug("Base64 decoded but doesn't seem like image format, treated as text.")
-
-            except (base64.binascii.Error, ValueError, TypeError):
-                # If decoding fails, it's likely text (or other non-base64 data)
+            if doc_type == "image": # If metadata explicitly says it's an image
                 if isinstance(original, str):
-                    texts.append(original)
-                    # logger.debug("Identified text (base64 decode failed).")
+                    try:
+                        base64.b64decode(original, validate=True) # Validate it's proper base64
+                        images.append(original)
+                        # logger.debug("Identified image based on 'type' and base64 content.")
+                    except (base64.binascii.Error, ValueError):
+                        logger.warning(f"Original data marked as 'image' but not valid base64: {original[:50]}...")
+                else:
+                    logger.warning(f"Original data marked as 'image' but not a string: {type(original)}")
+
+            elif doc_type in ("text", "table"): # If metadata says text or table
+                if isinstance(original, str):
+                    texts_from_originals.append(original)
+                    # logger.debug("Identified text/table based on 'type'.")
                 elif isinstance(original, bytes):
                      try:
-                         texts.append(original.decode('utf-8')) # Try decoding bytes as UTF-8 text
-                         # logger.debug("Identified text (decoded bytes to utf-8).")
+                         texts_from_originals.append(original.decode('utf-8'))
+                         # logger.debug("Identified text/table (decoded bytes to utf-8).")
                      except UnicodeDecodeError:
-                         logger.warning("Could not decode original_data bytes as UTF-8 text. Skipping.")
+                         logger.warning("Could not decode original_data bytes as UTF-8 text for text/table type. Skipping.")
                 else:
-                     logger.warning(f"Original data is neither string nor bytes after failing base64 decode. Type: {type(original)}. Skipping.")
+                     logger.warning(f"Original data for text/table is not string or bytes. Type: {type(original)}. Skipping.")
+            else: # Fallback if type is unknown or other, try to infer
+                try:
+                    base64.b64decode(original, validate=True)
+                    if isinstance(original, str) and original.startswith(('data:image', '/9j/')):
+                         images.append(original)
+                    elif isinstance(original, bytes): 
+                         images.append(base64.b64encode(original).decode('utf-8'))
+                    else:
+                         if isinstance(original, str): texts_from_originals.append(original)
+                except (base64.binascii.Error, ValueError, TypeError):
+                    if isinstance(original, str):
+                        texts_from_originals.append(original)
+                    elif isinstance(original, bytes):
+                         try: texts_from_originals.append(original.decode('utf-8'))
+                         except UnicodeDecodeError: logger.warning("Fallback: Could not decode bytes as UTF-8. Skipping.")
+                    else:
+                         logger.warning(f"Fallback: Original data type {type(original)} unhandled. Skipping.")
 
-        logger.info(f"Parsed documents into {len(images)} potential images and {len(texts)} potential texts based on original_data.")
-        return {"images": images, "texts": texts}
+
+        logger.info(f"Parsed documents into {len(images)} images and {len(texts_from_originals)} text/table elements based on original_data and type.")
+        return {"images": images, "texts": texts_from_originals}
  
     def azure_openai_query(self, message_prompt):
         """
-        Send the prompt to Azure OpenAI (using a direct API call).
-        This implementation uses a placeholder based on your previous usage.
+        Send the prompt to Azure OpenAI.
         """
-        logger.info(f"Sending prompt to AzureOpenAI...")
-        response = self.azure_client.beta.chat.completions.parse(
-            model=self.azure_deployment_name,
-            messages=message_prompt,
-            temperature = 0.0
-        )
-        if not response.choices:
-                logger.info("Did not receive any answer from Azure OpenAI")
-                return "error"        
-        #response_content = response.choices[0].message["content"].strip()
-        response_content = response.choices[0].message.content.strip()
-        logger.info(f"Azure OpenAI response received: {response_content}")
-        return response_content
+        logger.info(f"Sending prompt to AzureOpenAI ({self.azure_deployment_name})...")
+        try:
+            # The beta.chat.completions.parse method is not standard.
+            # Assuming it's a custom helper or an older SDK version.
+            # Standard way for current openai package (v1.x.x onwards):
+            response = self.azure_client.chat.completions.create(
+                model=self.azure_deployment_name, # This should be the deployment name for GPT-4V or similar
+                messages=message_prompt,
+                temperature = 0.0,
+                # max_tokens, etc. can be added if needed
+            )
+            if not response.choices:
+                    logger.warning("Did not receive any answer from Azure OpenAI")
+                    return "Error: No response from Azure OpenAI."        
+            response_content = response.choices[0].message.content
+            if response_content is None: # Handle cases where content might be None (e.g. finish_reason 'content_filter')
+                logger.warning("Azure OpenAI response content is None.")
+                logger.warning(f"Finish reason: {response.choices[0].finish_reason}")
+                # You might want to inspect response.choices[0].message for more details if it's a non-standard structure
+                # or if there's an error object.
+                return "Error: Azure OpenAI returned no content (possibly filtered)."
+            
+            response_content = response_content.strip()
+            logger.info(f"Azure OpenAI response received successfully.")
+            # logger.debug(f"Azure OpenAI response content: {response_content[:200]}...")
+            return response_content
+        except Exception as e:
+            logger.error(f"Error during Azure OpenAI query: {e}", exc_info=True)
+            # Provide a more generic error to the user, but log specifics
+            return f"Error communicating with Azure OpenAI: {str(e)}"
+
 
     def build_prompt(self, user_query, docs):
         """
@@ -639,101 +673,60 @@ class EmbeddingsGenerator:
         """
         logger.info(f"Building prompt using retrieved original content...")
 
-        # Retrieve original texts/tables for the context
-        original_texts_for_context = []
-        processed_doc_ids = set() # Keep track to avoid duplicates if somehow needed
+        # Parse docs to separate original images and texts/tables
+        docs_by_type = self.parse_docs(docs)
+        original_texts_for_context = docs_by_type["texts"] # These are actual original texts/tables
+        original_images_for_context = docs_by_type["images"]
 
-        for doc in docs:
-            metadata = doc.get("metadata", {})
-            doc_id = metadata.get("doc_id")
-            doc_type = metadata.get("type")
-            original_content = metadata.get("original_data") # <-- OBTENER EL ORIGINAL
+        context_text = "\n\n".join(original_texts_for_context) 
 
-            # Ensure we have original content and it's for text/table types
-            if original_content and doc_type in ("text", "table"):
-                # Optional: Check if it's actually a string, just in case
-                if isinstance(original_content, str):
-                     # Avoid adding duplicates if the same doc_id appeared multiple times in retrieval
-                     if doc_id not in processed_doc_ids:
-                         original_texts_for_context.append(original_content)
-                         if doc_id: # Only add if doc_id exists
-                             processed_doc_ids.add(doc_id)
-                else:
-                    logger.warning(f"Original content for doc_id {doc_id} (type: {doc_type}) is not a string. Skipping.")
-            elif not original_content and doc_type in ("text", "table"):
-                 logger.warning(f"Original content missing in metadata for retrieved doc_id {doc_id} (type: {doc_type}). Cannot add to context.")
+        if not context_text and not original_images_for_context:
+            logger.warning("No valid original content (text/table/image) found in retrieved docs to build context.")
+        elif not context_text:
+            logger.info("No text/table original content for context, but images might be present.")
+        elif not original_images_for_context:
+            logger.info("No image original content for context, but text/tables might be present.")
 
 
-        # Join the collected *original* texts
-        context_text = "\n\n".join(original_texts_for_context) # Use newline separation for clarity
+        logger.info(f"Context Text for Prompt (Originals - Snippet): {context_text[:300]}...") 
+        logger.info(f"Number of original images for prompt: {len(original_images_for_context)}")
 
-        if not context_text:
-            logger.warning("No valid text/table original content found in retrieved docs to build context.")
-            # Decide how to handle: maybe send a message saying no context found, or proceed without text context?
-            # For now, we'll proceed with an empty context_text, the LLM will rely only on images if any.
-
-        # Log a snippet of the context being used
-        logger.info(f"Context Text for Prompt (Originals - Snippet): {context_text[:500]}...") # Log first 500 chars
-
-        # --- Load prompt template and format ---
+       
         summary_prompt_path = os.path.join(PROMPT_DIR, 'user_query.txt')
         summary_prompt_template = self.load_prompt(summary_prompt_path)
 
-        filled_prompt = summary_prompt_template.format(
-            context_text=context_text, # <-- Ahora contiene los ORIGINALES
+        # Ensure context_text is a string, even if empty
+        filled_prompt_text = summary_prompt_template.format(
+            context_text=str(context_text), # Ensure it's a string
             user_query=user_query
         )
 
         # --- Prepare final message list ---
-        prompt_message = [
-            {
-                "role": "system",
-                "content": "Responde a la pregunta en español basándote únicamente en el contexto proporcionado (texto e imágenes)." # Clarified prompt
-            },
-            {"role": "user", "content": filled_prompt}
-        ]
+        # System prompt should be general
+        system_message = "Responde a la pregunta en español basándote únicamente en el contexto proporcionado (texto e imágenes). Si la respuesta no se encuentra en el contexto, indica que no tienes suficiente información."
+        
+        # User message content starts with the text part
+        user_content_list = [{"type": "text", "text": filled_prompt_text}]
 
-        # --- Handle Images ---
-        # This part correctly uses original_data via parse_docs, but let's re-verify parse_docs
-        docs_by_type = self.parse_docs(docs) # Separates originals into images/texts based on base64 decode
-
-        if docs_by_type["images"]:
-            logger.info(f"Adding {len(docs_by_type['images'])} images to the prompt.")
-            # Add image content separately, Azure format usually expects images in the 'user' turn content list
-            # Check Azure documentation for the exact multi-modal format they expect.
-            # Often it's adding the image_url dict within the 'content' list of the *last* user message.
-
-            # Let's try adding images to the main user message content list:
-            if isinstance(prompt_message[-1]["content"], str): # If current content is just text
-                 prompt_message[-1]["content"] = [{"type": "text", "text": prompt_message[-1]["content"]}] # Convert to list
-            elif not isinstance(prompt_message[-1]["content"], list):
-                 logger.error("Unexpected format for last user message content. Cannot add images.")
-                 # Handle error appropriately
-
-            # Append image URLs to the content list
-            for img_b64 in docs_by_type["images"]:
-                 # Ensure it's a valid base64 string before adding
+        # Add images to the user message content
+        if original_images_for_context:
+            logger.info(f"Adding {len(original_images_for_context)} images to the prompt's user message.")
+            for img_b64 in original_images_for_context:
                  try:
-                     base64.b64decode(img_b64) # Quick validation
-                     prompt_message[-1]["content"].append({
+                     base64.b64decode(img_b64, validate=True) # Validate before adding
+                     user_content_list.append({
                          "type": "image_url",
                          "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
                      })
-                 except Exception as decode_err:
-                     logger.error(f"Failed to decode base64 image data before adding to prompt: {decode_err}. Skipping image.")
+                 except (base64.binascii.Error, ValueError) as decode_err:
+                     logger.error(f"Failed to decode/validate base64 image data for prompt: {decode_err}. Skipping image.")
 
-            # --- Alternative way to add images (separate message - less common for context): ---
-            # for img in docs_by_type["images"]:
-            #     prompt_message.append({
-            #         "role": "user", # Or potentially 'system' if providing image context? Check Azure docs.
-            #         "content": [
-            #             # Optional text preamble for the image
-            #             # {"type": "text", "text": "Context Image:"},
-            #             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}}
-            #         ]
-            #     })
-
-        logger.debug(f"Final prompt message structure: {prompt_message}")
+        prompt_message = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_content_list} # Content is now a list
+        ]
+        
+        # logger.debug(f"Final prompt message structure for Azure: {prompt_message}")
         return prompt_message
 
 
@@ -743,12 +736,18 @@ class EmbeddingsGenerator:
         """
         Retrieve relevant context from the stores, build a prompt, and send it to Azure OpenAI.
         """
-        logger.info(f"Processing query: {user_query}")
-        # Retrieve data
+        logger.info(f"Processing user query: {user_query}")
+        # Retrieve data (summaries + metadata linking to originals)
         self.retrieved_docs = self.retrieve_data(user_query, k=k)
-        # Build prompt
+        if not self.retrieved_docs:
+            logger.warning("No documents retrieved for the query. Cannot build prompt.")
+            # Return a message indicating no context was found
+            return "No se encontró información relevante en los documentos para responder a tu pregunta."
+
+        # Build prompt using original content from retrieved_docs
         prompt_message = self.build_prompt(user_query, self.retrieved_docs)
-        # Send prompt
+        
+        # Send prompt to Azure OpenAI (which handles multimodal input)
         response = self.azure_openai_query(prompt_message)
         return response
 
@@ -759,51 +758,88 @@ class EmbeddingsGenerator:
         """
         if not self.retrieved_docs:
              logger.warning("get_retrieved_context_data called but self.retrieved_docs is empty.")
-             return [], [] # Return empty lists if no docs were retrieved
+             return [], [] 
 
         logger.info(f"Extracting original context for display from {len(self.retrieved_docs)} retrieved documents.")
-
-        original_texts_for_display = []
-        processed_doc_ids_display = set() # Avoid duplicates in display
-
-        for doc in self.retrieved_docs:
-            metadata = doc.get("metadata", {})
-            doc_id = metadata.get("doc_id")
-            doc_type = metadata.get("type")
-            
-            original_content = metadata.get("original_data")            
-
-            # Extraer solo textos y tablas originales para mostrar como 'context_text'
-            if doc_type in ("text", "table"):
-                if original_content:
-                    if isinstance(original_content, str):
-                         # Evitar duplicados si el mismo doc_id fue recuperado varias veces
-                         if doc_id not in processed_doc_ids_display:
-                             original_texts_for_display.append(original_content)
-                             if doc_id:
-                                 processed_doc_ids_display.add(doc_id)
-                    else:
-                        logger.warning(f"Original content for display (doc_id {doc_id}, type {doc_type}) is not a string. Skipping.")
-                else:
-                    
-                    logger.warning(f"Original content missing in metadata for display (doc_id {doc_id}, type {doc_type}). Skipping.")
         
-        docs_by_type = self.parse_docs(self.retrieved_docs)
-        context_img = docs_by_type['images']
+        # Use parse_docs to get original texts and images directly
+        parsed_originals = self.parse_docs(self.retrieved_docs)
+        
+        original_texts_for_display = parsed_originals["texts"]
+        context_img_for_display = parsed_originals["images"]
 
-        logger.info(f"Returning {len(original_texts_for_display)} original text/table contexts and {len(context_img)} image contexts for display.")
+        logger.info(f"Returning {len(original_texts_for_display)} original text/table contexts and {len(context_img_for_display)} image contexts for display.")
 
-        return original_texts_for_display, context_img
+        return original_texts_for_display, context_img_for_display
      
     def clear_chroma_data(self):
         import shutil
-        shutil.rmtree(self.vector_db_dir, ignore_errors=True)
+        # Check if the directory exists before attempting to remove it
+        if os.path.exists(self.vector_db_dir):
+            shutil.rmtree(self.vector_db_dir, ignore_errors=True)
+            logger.info(f"ChromaDB directory '{self.vector_db_dir}' removed.")
+            # Recreate the directory for future use by PersistentClient
+            os.makedirs(self.vector_db_dir, exist_ok=True)
+            logger.info(f"ChromaDB directory '{self.vector_db_dir}' recreated.")
+        else:
+            logger.info(f"ChromaDB directory '{self.vector_db_dir}' does not exist. No need to remove.")
         
+        # Re-initialize the Chroma client and collection to ensure a clean state
+        # This is important because just deleting files might not be enough if client holds state.
+        try:
+            chroma_settings = Settings(anonymized_telemetry=False, is_persistent=True)
+            self.chroma_client = PersistentClient(path=self.vector_db_dir, settings=chroma_settings)
+            collection_name = "multi_modal_rag"
+            self.vectorstore = self.chroma_client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=self.embedding_fn
+            )
+            logger.info("ChromaDB client and collection re-initialized after clearing data.")
+        except Exception as e:
+            logger.error(f"Error re-initializing ChromaDB after clearing data: {e}", exc_info=True)
+            # This could leave the system in an inconsistent state for ChromaDB operations.
+            raise # Re-raise to make it evident there's an issue.
+
+
     def clear_sqlite_data(self): 
-        self.docstore.clear_sqlite_data(self.sqlite_db_path)
+        # The SQLiteStore.clear_sqlite_data seems to clear a 'files' table,
+        # but our docstore table is named 'docstore'.
+        # Let's adapt it to clear the 'docstore' table.
+        try:
+            conn = sqlite3.connect(self.sqlite_db_path)
+            cursor = conn.cursor()
+            
+            # Clear the 'docstore' table
+            cursor.execute("DELETE FROM docstore;")
+            conn.commit()
+            logger.info("Successfully cleared the 'docstore' table data in SQLite.")
+            
+            # Optionally, vacuum to reclaim space, though may not be necessary for small dbs
+            # cursor.execute("VACUUM;")
+            # conn.commit()
+            
+            conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error clearing 'docstore' table: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error clearing 'docstore' table: {e}", exc_info=True)
+            raise
+
     
     def clear_databases(self):
-        logger.info(f"Cleaning Chroma db...")
-        self.clear_chroma_data()
-        logger.info(f"Cleaning SQlite...")
-        self.clear_sqlite_data()
+        logger.info(f"Attempting to clear ChromaDB data...")
+        try:
+            self.clear_chroma_data()
+            logger.info(f"ChromaDB data cleared successfully.")
+        except Exception as e:
+            logger.error(f"Failed to clear ChromaDB data: {e}", exc_info=True)
+            # Decide if you want to stop or continue to clear SQLite
+            # For now, let's continue
+
+        logger.info(f"Attempting to clear SQLite data...")
+        try:
+            self.clear_sqlite_data()
+            logger.info(f"SQLite data cleared successfully.")
+        except Exception as e:
+            logger.error(f"Failed to clear SQLite data: {e}", exc_info=True)
